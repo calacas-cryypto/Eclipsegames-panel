@@ -18,6 +18,7 @@
 .panel { display: none; max-width: 800px; margin: 0 auto; }
 .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .add-btn { width: auto; padding: 10px 20px; font-size: 24px; }
+.logout-btn { width: auto; padding: 10px 20px; background: #333; }
 .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 100; align-items: center; justify-content: center; }
 .modal.active { display: flex; }
 .modal-content { background: var(--card); width: 90%; max-width: 500px; padding: 20px; border-radius: 16px; max-height: 90vh; overflow-y: auto; }
@@ -32,6 +33,9 @@
 .tab { flex: 1; padding: 8px; background: var(--bg); border: 1px solid var(--sub); color: var(--text); border-radius: 8px; cursor: pointer; text-align: center; }
 .tab.active { background: var(--primary); color: white; border-color: var(--primary); }
 .warning { background: #F59E0B; color: #111827; padding: 10px; border-radius: 8px; margin: 10px 0; font-size: 12px; text-align: center; }
+.upload-progress { background: var(--bg); border-radius: 10px; height: 8px; margin-top: 10px; overflow: hidden; display: none; }
+.upload-progress-bar { background: var(--primary); height: 100%; width: 0%; transition: 0.3s; }
+.error-msg { color: #EF4444; margin-top: 10px; display: none; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -41,24 +45,29 @@
     <h1>Eclipse-games-Panel</h1>
     <p>Panel de Administración</p>
     <input type="password" id="pass" placeholder="Contraseña">
+    <input type="password" id="tokenInput" placeholder="Github Token - ghp_xxxxx">
     <button onclick="login()">Entrar</button>
+    <div class="error-msg" id="errorMsg">❌ Contraseña o Token incorrecto</div>
   </div>
 
   <!-- PANEL -->
   <div class="panel" id="panel">
     <div class="header">
       <h2>Mis Mods</h2>
-      <button class="add-btn" onclick="abrirModal()">+</button>
+      <div>
+        <button class="add-btn" onclick="abrirModal()">+</button>
+        <button class="logout-btn" onclick="logout()">Salir</button>
+      </div>
     </div>
     <div class="mod-list" id="modList"></div>
-    <p class="info">✅ Los mods se guardan directo en Database<br>✅ Sin tarjeta, sin Storage<br>✅ Tu web se actualiza sola en tiempo real</p>
+    <p class="info">✅ Imágenes se suben a Github<br>✅ Tu web se actualiza sola en tiempo real</p>
   </div>
 
   <!-- MODAL AGREGAR -->
   <div class="modal" id="modal">
     <div class="modal-content">
       <div class="modal-title">Agregar Nuevo Mod</div>
-      <div class="warning">⚠️ Comprime las fotos a menos de 500KB pa que no truene</div>
+      <div class="warning">⚠️ Comprime las fotos a menos de 500KB pa que vuele</div>
 
       <label>Nombre del mod</label>
       <input type="text" id="nombre" placeholder="Essentials Update V1.6">
@@ -85,7 +94,7 @@
 
       <label>Imagen del mod</label>
       <div class="tabs">
-        <div class="tab active" onclick="cambiarTab('archivo')">📁 Archivo</div>
+        <div class="tab active" onclick="cambiarTab('archivo')">📁 Subir a Github</div>
         <div class="tab" onclick="cambiarTab('link')">🔗 Link</div>
       </div>
 
@@ -98,6 +107,10 @@
         <input type="text" id="imagenLink" placeholder="https://i.imgur.com/ejemplo.png">
       </div>
 
+      <div class="upload-progress" id="uploadProgress">
+        <div class="upload-progress-bar" id="uploadProgressBar"></div>
+      </div>
+
       <button onclick="guardarMod()" id="btnGuardar">Guardar Mod</button>
       <button style="background: var(--sub);" onclick="cerrarModal()">Cancelar</button>
     </div>
@@ -105,7 +118,7 @@
 
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-  import { getDatabase, ref, push, onValue, remove, set } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js';
+  import { getDatabase, ref, push, onValue, remove } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js';
 
   // ===== TU CONFIG DE FIREBASE - ECLIPSEMC OFICIAL =====
   const firebaseConfig = {
@@ -121,18 +134,58 @@
 
   const app = initializeApp(firebaseConfig);
   const db = getDatabase(app);
+
+  // ===== CONFIG GITHUB =====
+  const GITHUB_REPO = 'calacas-cryypto/Eclipse_games';
+  const GITHUB_FOLDER = 'imagenes';
+  let GITHUB_TOKEN = '';
+
   const PASSWORD = "Ɛč̣ľịpĉẹ-mč̣"; // CAMBIA ESTA CONTRASEÑA WEE
   let tipoImagen = 'archivo';
+  let imagenFile = null;
 
   window.login = function() {
-    if(document.getElementById('pass').value === PASSWORD) {
+    const pass = document.getElementById('pass').value;
+    const token = document.getElementById('tokenInput').value.trim();
+
+    if(pass === PASSWORD && token.startsWith('ghp_')) {
+      GITHUB_TOKEN = token;
+      document.getElementById('login').style.display = 'none';
+      document.getElementById('panel').style.display = 'block';
+      sessionStorage.setItem('eclipseToken', token);
+      sessionStorage.setItem('eclipseLogin', 'true');
+      cargarMods();
+    } else {
+      document.getElementById('errorMsg').style.display = 'block';
+      setTimeout(() => {
+        document.getElementById('errorMsg').style.display = 'none';
+      }, 3000);
+    }
+  }
+
+  window.logout = function() {
+    sessionStorage.removeItem('eclipseToken');
+    sessionStorage.removeItem('eclipseLogin');
+    location.reload();
+  }
+
+  // Auto-login
+  if(sessionStorage.getItem('eclipseLogin') === 'true') {
+    const savedToken = sessionStorage.getItem('eclipseToken');
+    if(savedToken) {
+      GITHUB_TOKEN = savedToken;
       document.getElementById('login').style.display = 'none';
       document.getElementById('panel').style.display = 'block';
       cargarMods();
-    } else {
-      alert('Contraseña incorrecta');
     }
   }
+
+  document.getElementById('pass').addEventListener('keypress', (e) => {
+    if(e.key === 'Enter') login();
+  });
+  document.getElementById('tokenInput').addEventListener('keypress', (e) => {
+    if(e.key === 'Enter') login();
+  });
 
   window.abrirModal = () => document.getElementById('modal').classList.add('active');
 
@@ -154,10 +207,11 @@
     const file = e.target.files[0];
     if(file) {
       if(file.size > 500000) {
-        alert('Esta foto pesa más de 500KB Comprimela o usa link');
+        alert('Esta foto pesa más de 500KB. Comprimela o usa link');
         e.target.value = '';
         return;
       }
+      imagenFile = file;
       const reader = new FileReader();
       reader.onload = function(e) {
         document.getElementById('preview').src = e.target.result;
@@ -175,15 +229,53 @@
     document.getElementById('imagenArchivo').value = '';
     document.getElementById('imagenLink').value = '';
     document.getElementById('preview').style.display = 'none';
+    imagenFile = null;
   }
 
-  // CONVERTIR A BASE64
-  function archivoABase64(file) {
+  // SUBIR A GITHUB
+  async function subirImagenGithub(file) {
+    if(!GITHUB_TOKEN) throw new Error('No hay token. Cierra sesión y entra de nuevo.');
+
+    const fileName = `eclipse_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+    const reader = new FileReader();
+
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const base64 = e.target.result.split(',')[1];
+        document.getElementById('uploadProgress').style.display = 'block';
+        document.getElementById('uploadProgressBar').style.width = '30%';
+
+        try {
+          const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FOLDER}/${fileName}`, {
+            method: 'PUT',
+            headers: {
+              'Authorization': `token ${GITHUB_TOKEN}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              message: `Subir imagen EclipseMC: ${fileName}`,
+              content: base64
+            })
+          });
+
+          document.getElementById('uploadProgressBar').style.width = '100%';
+
+          if (response.ok) {
+            const url = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${GITHUB_FOLDER}/${fileName}`;
+            setTimeout(() => {
+              document.getElementById('uploadProgress').style.display = 'none';
+              document.getElementById('uploadProgressBar').style.width = '0%';
+            }, 500);
+            resolve(url);
+          } else {
+            const error = await response.json();
+            reject(`Error Github: ${error.message}`);
+          }
+        } catch (error) {
+          reject(error);
+        }
+      };
       reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = error => reject(error);
     });
   }
 
@@ -210,29 +302,29 @@
     }
 
     try {
-      // SI ES ARCHIVO, CONVERTIR A BASE64
-      if(tipoImagen === 'archivo' && document.getElementById('imagenArchivo').files[0]) {
-        const file = document.getElementById('imagenArchivo').files[0];
-        if(file.size > 500000) {
-          alert('La foto pesa más de 500KB Usa link o comprímela');
+      if(tipoImagen === 'archivo' && imagenFile) {
+        if(imagenFile.size > 500000) {
+          alert('La foto pesa más de 500KB. Usa link o comprímela');
           btnGuardar.disabled = false;
           btnGuardar.innerText = 'Guardar Mod';
           return;
         }
-        mod.imagen = await archivoABase64(file);
+        btnGuardar.innerText = 'Subiendo a Github...';
+        mod.imagen = await subirImagenGithub(imagenFile);
       } else {
-        // USAR LINK DIRECTO
-        mod.imagen = document.getElementById('imagenLink').value || 'https://via.placeholder.com/300x150/10B981/FFFFFF?text=LOKY';
+        mod.imagen = document.getElementById('imagenLink').value || 'https://via.placeholder.com/300x150/10B981/FFFFFF?text=ECLIPSE';
       }
 
+      btnGuardar.innerText = 'Guardando en Firebase...';
       await push(ref(db, 'mods'), mod);
-      alert('MOD SUBIDO');
+      alert('MOD SUBIDO ÉLITE 🔥');
       cerrarModal();
     } catch (error) {
       alert('Error we: ' + error);
     } finally {
       btnGuardar.disabled = false;
       btnGuardar.innerText = 'Guardar Mod';
+      document.getElementById('uploadProgress').style.display = 'none';
     }
   }
 
